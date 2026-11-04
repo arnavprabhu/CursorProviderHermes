@@ -40,7 +40,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "process://cursor-subscription"
+BASE_URL = rt.BASE_URL
 DEFAULT_EVENT_TIMEOUT_S = float(os.environ.get("CURSOR_SUBSCRIPTION_EVENT_TIMEOUT", "900"))
 IDLE_SESSION_S = 45 * 60
 MAX_SESSIONS = 32
@@ -115,7 +115,7 @@ class Sidecar:
                 return
             if not rt.runtime_present():
                 raise CursorRuntimeMissing()
-            env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
+            env = rt.clean_env({"CURSOR_SUBSCRIPTION_WORKDIR": str(rt.state_dir() / "workspace")})
             self.proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
                                          env=env, start_new_session=True)
@@ -441,11 +441,13 @@ class Client:
     HERMES_SKIP_TRANSPORT_WRAP = True
     HERMES_SKIP_ASYNC_WRAP = True
 
-    def __init__(self, command=None, args=None, env=None, timeout=None, **_):
-        self.api_key = "external-process"
+    def __init__(self, api_key=None, timeout=None, **_):
+        # The key Hermes resolved for this provider (credential pool or CURSOR_API_KEY); handed to
+        # the sidecar with each request, never logged or written anywhere.
+        self.api_key = api_key if isinstance(api_key, str) else ""
         self.base_url = BASE_URL
-        command = command or os.environ.get("CURSOR_SUBSCRIPTION_COMMAND") or str(rt.LAUNCHER)
-        self.command = ([command] if isinstance(command, str) else list(command)) + list(args or [])
+        self.command = [str(rt.LAUNCHER)]
+        self._key_id = hashlib.sha256(self.api_key.encode()).hexdigest()[:16]
         self.timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else DEFAULT_EVENT_TIMEOUT_S
         self._lock = threading.Lock()
         self._active = set()   # session ids with a request in flight from this client
@@ -467,6 +469,8 @@ class Client:
     def create(self, **kwargs):
         if self._closed:
             raise CursorError("Cursor client is closed")
+        if not self.api_key.strip():
+            raise CursorLoggedOut()
         stream = self._stream(**kwargs)
         if kwargs.get("stream"):
             return _Stream(stream, self.cancel)
@@ -498,7 +502,7 @@ class Client:
         model_key = (model_id, tuple(params))
         tools_sig = hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()
         digests = [digest(m) for m in rest]
-        fingerprint = hashlib.sha256(json.dumps([system, digests[0], auxiliary]).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([self._key_id, system, digests[0], auxiliary]).encode()).hexdigest()
 
         sidecar = get_sidecar(self.command)
         _sweep(sidecar)
@@ -517,7 +521,8 @@ class Client:
         if plan is None:
             text, images = build_seed_prompt(system, rest, response_format)
             payload = {"create": {"model": model_id, "params": [list(p) for p in params], "tools": tools,
-                                  "name": "Hermes" + (" (auxiliary)" if auxiliary else "")},
+                                  "name": "Hermes" + (" (auxiliary)" if auxiliary else ""),
+                                  "api_key": self.api_key},
                        "send": {"text": text, "images": images}, "results": None}
             mode = "replay" if len(rest) > 1 else "new"
         elif plan[0] == "resume":
@@ -526,8 +531,8 @@ class Client:
         else:
             payload = {"create": None, "send": {"text": plan[1], "images": plan[2]}, "results": None}
             mode = "followup"
-        logger.info("cursor-subscription: %s session=%s model=%s tools=%d msgs=%d",
-                     mode, conv.sid, model_id, len(tools), len(rest))
+        logger.info("%s: %s session=%s model=%s tools=%d msgs=%d",
+                     rt.PROVIDER, mode, conv.sid, model_id, len(tools), len(rest))
         return self._events(sidecar, conv, fingerprint, digests, payload, model, auxiliary and not tools)
 
     def _events(self, sidecar, conv, fingerprint, digests, payload, model, one_shot):
@@ -639,14 +644,14 @@ class _Stream:
         self.close()
 
 
-def list_models(command=None, timeout=60):
-    """Live catalog from the sidecar; refreshes the on-disk cache. None when unavailable."""
-    if not rt.runtime_present() or not rt.auth_state()["logged_in"]:
+def list_models(api_key, timeout=60):
+    """Live catalog for the account behind *api_key*; refreshes the on-disk cache. None when unavailable."""
+    if not api_key or not rt.runtime_present():
         return None
     try:
-        rows = get_sidecar(command).call("models", timeout=timeout).get("models")
+        rows = get_sidecar().call("models", timeout=timeout, api_key=api_key).get("models")
     except CursorError as exc:
-        logger.debug("cursor-subscription: model list failed: %s", exc)
+        logger.debug("%s: model list failed: %s", rt.PROVIDER, exc)
         return None
     if isinstance(rows, list) and rows:
         catalog.store(rows)

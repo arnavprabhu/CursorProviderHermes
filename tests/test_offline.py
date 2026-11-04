@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ["CURSOR_SUBSCRIPTION_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="cursor-sub-test-")
+os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="cursor-sub-test-")  # model cache lands here
 
 import cursor_catalog as catalog  # noqa: E402
 import cursor_runtime as rt  # noqa: E402
@@ -168,31 +168,28 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(tools, [{"name": "x", "description": "d", "schema": {"type": "object", "properties": {}}}])
 
 
-class RuntimeTests(unittest.TestCase):
-    def test_auth_state_never_returns_the_key(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "auth.json"
-            path.write_text(json.dumps({"version": 1, "apiKey": "crsr_secret", "email": "a@b.c",
-                                        "apiKeyExpiresAtMs": 9_999_999_999_999}))
-            os.environ["CURSOR_SDK_AUTH_FILE"] = str(path)
-            os.environ.pop("CURSOR_API_KEY", None)
-            try:
-                state = rt.auth_state()
-            finally:
-                os.environ.pop("CURSOR_SDK_AUTH_FILE")
-        self.assertTrue(state["logged_in"])
-        self.assertNotIn("crsr_secret", json.dumps(state))
+class CredentialTests(unittest.TestCase):
+    def test_sidecar_env_never_carries_an_ambient_key(self):
+        os.environ["CURSOR_API_KEY"] = "crsr_ambient"
+        try:
+            self.assertNotIn("CURSOR_API_KEY", rt.clean_env())
+        finally:
+            os.environ.pop("CURSOR_API_KEY")
 
-    def test_expired_login_is_logged_out(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "auth.json"
-            path.write_text(json.dumps({"version": 1, "apiKey": "k", "apiKeyExpiresAtMs": 1}))
-            os.environ["CURSOR_SDK_AUTH_FILE"] = str(path)
-            os.environ.pop("CURSOR_API_KEY", None)
-            try:
-                self.assertFalse(rt.auth_state()["logged_in"])
-            finally:
-                os.environ.pop("CURSOR_SDK_AUTH_FILE")
+    def test_client_without_hermes_credential_refuses(self):
+        client = transport.Client(api_key="")
+        with self.assertRaises(transport.CursorLoggedOut):
+            client.chat.completions.create(model="composer-2.5", messages=[{"role": "user", "content": "hi"}])
+
+    def test_no_plugin_code_reads_vendor_credential_files(self):
+        for path in ROOT.rglob("*"):
+            if path.suffix not in (".py", ".mjs", ".sh") and path.name != "cursor-sidecar":
+                continue
+            if ".venv" in path.parts or path.name == "test_offline.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("auth.json", text, path)
+            self.assertNotIn(".cursor/sdk", text, path)
 
 
 if __name__ == "__main__":

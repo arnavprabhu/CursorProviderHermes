@@ -1,12 +1,10 @@
 #!/bin/sh
 # Launches the Cursor SDK sidecar (sidecar/worker.py) with the plugin's private venv python.
-# Hermes treats this file as the provider's external-process command.
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-RUNTIME="${CURSOR_SUBSCRIPTION_RUNTIME_DIR:-$DIR/.runtime}"
-PY="${CURSOR_SUBSCRIPTION_PYTHON:-$RUNTIME/venv/bin/python}"
+PY="$DIR/.venv/bin/python"
 if [ ! -x "$PY" ]; then
-  echo "cursor-subscription: Cursor SDK runtime not installed. Run: python3 $DIR/cursor_setup.py login" >&2
+  echo "cursor-subscription-directsdk: Cursor SDK runtime not installed. Run: hermes auth add cursor-subscription-directsdk" >&2
   exit 3
 fi
-unset PYTHONPATH PYTHONHOME VIRTUAL_ENV
+unset PYTHONPATH PYTHONHOME VIRTUAL_ENV CURSOR_API_KEY
 exec "$PY" -I "$DIR/sidecar/worker.py" "$@"

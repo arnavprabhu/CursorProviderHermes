@@ -1,19 +1,15 @@
-name: cursor-subscription
+name: cursor-subscription-directsdk
 kind: model-provider
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
-description: Cursor Subscription (Experimental) — use your Cursor plan's models (Claude, GPT, Gemini, Grok, Composer, Auto) as a Hermes provider through the official Cursor SDK; Hermes owns tools, approvals and compaction
+description: Cursor Subscription (DirectSDK) — use your Cursor plan's models (Claude, GPT, Gemini, Grok, Composer, Auto) as a Hermes provider through Cursor's official SDK, with Hermes tools as native Cursor custom tools; Hermes owns tools, approvals and compaction
 author: Arnav Prabhu
 license: MIT
 homepage: https://github.com/arnavprabhu/CursorProviderHermes
 tags: [model-provider, cursor, subscription, experimental]
-requires_hermes: ">=0.21.4"
+requires_hermes: ">=0.22.6"
 platforms: [linux, macos]
+# The Cursor SDK runs in a sidecar with its own venv (<plugin>/.venv, hash-pinned cursor-sdk).
+python_runtime: external
 optional_env:
   - CURSOR_API_KEY
-  - CURSOR_SUBSCRIPTION_COMMAND
-  - CURSOR_SUBSCRIPTION_PYTHON
-external_dependencies:
-  - name: cursor-sdk
-    check: "python3 cursor_setup.py status"
-    install: "python3 cursor_setup.py login"

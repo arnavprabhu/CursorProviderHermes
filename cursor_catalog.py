@@ -43,30 +43,36 @@ ALIASES = {
 }
 
 
+def cache_path():
+    return rt.state_dir() / "models.json"
+
+
 def load_cached(max_age=None):
+    path = cache_path()
     try:
-        stat = rt.CATALOG_CACHE.stat()
+        stat = path.stat()
     except OSError:
         return None
     if max_age is not None and time.time() - stat.st_mtime > max_age:
         return None
-    if _memo["mtime"] == stat.st_mtime and _memo["rows"] is not None:
+    if _memo["mtime"] == (str(path), stat.st_mtime) and _memo["rows"] is not None:
         return _memo["rows"]
     try:
-        rows = json.loads(rt.CATALOG_CACHE.read_text(encoding="utf-8")).get("models")
+        rows = json.loads(path.read_text(encoding="utf-8")).get("models")
     except (OSError, ValueError, AttributeError):
         return None
     if not isinstance(rows, list):
         return None
-    _memo.update(mtime=stat.st_mtime, rows=rows)
+    _memo.update(mtime=(str(path), stat.st_mtime), rows=rows)
     return rows
 
 
 def store(rows):
-    rt.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = rt.CATALOG_CACHE.with_suffix(".tmp")
+    path = cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"fetched_at": time.time(), "models": rows}), encoding="utf-8")
-    tmp.replace(rt.CATALOG_CACHE)
+    tmp.replace(path)
 
 
 def split_model(model):

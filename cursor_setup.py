@@ -1,9 +1,10 @@
-"""Setup CLI for the cursor-subscription Hermes provider.
+"""Setup CLI for the cursor-subscription-directsdk Hermes provider.
 
-    python cursor_setup.py install   # private venv + pinned cursor-sdk
-    python cursor_setup.py login     # install if needed, then Cursor's browser login
-    python cursor_setup.py status    # runtime + login state (never prints the key)
-    python cursor_setup.py logout    # forget the stored Cursor SDK login
+    python3 cursor_setup.py install   # private .venv + hash-pinned cursor-sdk
+    python3 cursor_setup.py status    # runtime state
+
+Sign in with `hermes auth add cursor-subscription-directsdk` (Cursor's browser login; the key is
+stored in Hermes' credential pool), or set CURSOR_API_KEY.
 """
 from __future__ import annotations
 
@@ -21,16 +22,10 @@ def main(argv):
     if command == "install":
         rt.install()
         return 0
-    if command == "login":
-        if not rt.runtime_installed():
-            rt.install()
-        return rt.run_auth("login")
-    if command == "logout":
-        return rt.run_auth("logout")
     if command == "status":
-        state = rt.auth_state()
         print(json.dumps({"runtime_installed": rt.runtime_installed(), "venv": str(rt.VENV_DIR),
-                          "sdk": rt.SDK_REQUIREMENT, **{k: v for k, v in state.items()}}, indent=2))
+                          "sdk": rt.SDK_REQUIREMENT, "state_dir": str(rt.state_dir()),
+                          "sign_in": f"hermes auth add {rt.PROVIDER}"}, indent=2))
         return 0
     print(__doc__)
     return 2

@@ -1,0 +1,42 @@
+# Hash-pinned runtime for the Cursor SDK sidecar (installed into <plugin>/.venv with --require-hashes).
+# Regenerate: echo 'cursor-sdk==1.3.1' > req.in && uv pip compile --generate-hashes --universal --python-version 3.11 req.in
+anyio==4.16.0 \
+    --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
+    --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
+    # via httpx
+certifi==2026.10.23 \
+    --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+    # via
+    #   httpcore
+    #   httpx
+cursor-sdk==1.3.1 \
+    --hash=sha256:2a21618215710b71d35059c6a262e9f7f954d5d8b7329d1d01d27cefa4069033 \
+    --hash=sha256:7441738625ffe3ceadd51a5ca8af1ed21128327694af66c892f47a5559f7071f \
+    --hash=sha256:8882fe28317b7cdeb8bbf212e0883c71eff93f69eda389a7bc758f38fa44c03d \
+    --hash=sha256:9c4cb2b3982c06d731bb358790b534d4c4b283af4884ca03ec8adf6594e81030 \
+    --hash=sha256:cc0e700cd4cf2cad9421bdd382a6e8421ff713daddc2e4aa5fc252971d42b7ea \
+    --hash=sha256:f7d459072fb963684d89bad9d16eeb7679b9523780d40f1f8581093a3a58b431
+    # via cursor-sdk pin
+h11==0.16.0 \
+    --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
+    --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+    # via httpcore
+httpcore==1.0.9 \
+    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
+    --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
+    # via httpx
+httpx==0.28.1 \
+    --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
+    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+    # via cursor-sdk
+idna==3.20 \
+    --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+    # via
+    #   anyio
+    #   httpx
+typing-extensions==4.16.0 ; python_full_version < '3.15' \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+    # via anyio

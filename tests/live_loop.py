@@ -3,9 +3,10 @@
 Simulates Hermes' loop: create() -> run requested tools locally -> create() with results -> ...
 then a follow-up user turn on the same conversation, then a replayed (rewritten) history.
 
-    .runtime/venv/bin/python -I tests/live_loop.py [model]
+    CURSOR_API_KEY=... python3 -I tests/live_loop.py [model]     (a Cursor user API key)
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -69,7 +70,7 @@ def loop(client, messages, stream=True, limit=8):
 
 
 def main():
-    client = transport.Client()
+    client = transport.Client(api_key=os.environ["CURSOR_API_KEY"])
     system = "You are a terse assistant. Always use tools for weather and arithmetic; never guess."
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": "Weather in Dallas and Austin? Then add the two temperatures with the add tool."}]

@@ -1,4 +1,4 @@
-"""Cursor SDK sidecar for the Hermes `cursor-subscription` provider.
+"""Cursor SDK sidecar for the Hermes `cursor-subscription-directsdk` provider.
 
 Runs inside the plugin's private venv (which has ``cursor-sdk``) and speaks JSON lines on
 stdin/stdout. One worker serves every Hermes conversation in the parent process.
@@ -15,11 +15,12 @@ Protocol (one JSON object per line):
   -> {"op": "hello", "id": 1}
   <- {"id": 1, "type": "result", "sdk_version": "..."}
 
-  -> {"op": "models", "id": 2}
+  -> {"op": "models", "id": 2, "api_key": "..."}
   <- {"id": 2, "type": "result", "models": [...]}
 
   -> {"op": "turn", "id": 3, "session": "s1",
-      "create": {"model": "...", "params": [[k, v]], "tools": [{"name", "description", "schema"}]} | null,
+      "create": {"model": "...", "params": [[k, v]], "tools": [{"name", "description", "schema"}],
+                 "api_key": "..."} | null,
       "send": {"text": "...", "images": [{"data", "mime_type"}]} | null,
       "results": {"<call id>": {"content": "...", "is_error": false}} | null}
   <- {"id": 3, "type": "text" | "thinking", "text": "..."}            (zero or more)
@@ -37,7 +38,6 @@ import json
 import os
 import sys
 import threading
-import time
 import traceback
 import uuid
 
@@ -77,22 +77,14 @@ def log(*parts):
     sys.stderr.flush()
 
 
-def api_key():
-    """CURSOR_API_KEY, else the key Cursor's own SDK login stored. Catalog RPCs need it per call."""
-    key = os.environ.get("CURSOR_API_KEY", "").strip()
-    if key:
-        return key
-    path = os.path.expanduser(os.environ.get("CURSOR_SDK_AUTH_FILE", "~/.cursor/sdk/auth.json"))
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    key = data.get("apiKey") if isinstance(data, dict) else None
-    expires = data.get("apiKeyExpiresAtMs") if isinstance(data, dict) else None
-    if isinstance(expires, (int, float)) and expires < time.time() * 1000:
-        return None
-    return key if isinstance(key, str) and key else None
+def require_key(msg):
+    """The API key Hermes resolved for this request. The sidecar has no other credential source."""
+    key = msg.get("api_key") if isinstance(msg, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        raise cursor_sdk.AuthenticationError(
+            "Not signed in to Cursor: Hermes has no credential for this provider. Run "
+            "`hermes auth add cursor-subscription-directsdk` or set CURSOR_API_KEY.")
+    return key.strip()
 
 
 def error_payload(exc):
@@ -253,7 +245,7 @@ class Session:
         model = ModelSelection(id=spec["model"], params=params)
         options = AgentOptions(
             model=model,
-            api_key=self.worker.key(),
+            api_key=require_key(spec),
             name=spec.get("name") or "Hermes",
             # Only the MCP group: no shell/edit/read built-ins, but custom tools stay offered.
             tools=["mcp"] if tools else [],
@@ -338,20 +330,12 @@ class Session:
 class Worker:
     def __init__(self):
         self.workdir = os.environ.get("CURSOR_SUBSCRIPTION_WORKDIR") or os.path.join(
-            os.path.expanduser("~"), ".cache", "hermes-cursor-subscription", "workspace")
+            os.path.expanduser("~"), ".hermes", "cache", "cursor-subscription-directsdk", "workspace")
         os.makedirs(self.workdir, mode=0o700, exist_ok=True)
         self._client = None
         self._client_lock = threading.Lock()
         self.sessions = {}
         self.sessions_lock = threading.Lock()
-
-    def key(self):
-        key = api_key()
-        if not key:
-            raise cursor_sdk.AuthenticationError(
-                "Not signed in to Cursor. Run the plugin login (hermes model -> Cursor Subscription) "
-                "or set CURSOR_API_KEY.")
-        return key
 
     @property
     def client(self):
@@ -380,7 +364,7 @@ class Worker:
 
     def op_models(self, msg):
         rows = []
-        for m in self.client.models.list(api_key=self.key()):
+        for m in self.client.models.list(api_key=require_key(msg)):
             rows.append({
                 "id": m.id, "display_name": m.display_name, "description": m.description,
                 "parameters": [{"id": p.id, "values": [v.value for v in p.values]} for p in m.parameters],
@@ -429,7 +413,7 @@ class Worker:
             try:
                 msg = json.loads(line)
             except ValueError:
-                log("bad line:", line[:200])
+                log("bad protocol line (%d chars)" % len(line))
                 continue
             op = msg.get("op")
             if op == "shutdown":
