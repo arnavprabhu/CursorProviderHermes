@@ -1,6 +1,6 @@
 name: cursor-subscription-directsdk
 kind: model-provider
-version: 0.2.0
+version: 0.3.0
 manifest_version: 2
 description: Cursor Subscription (DirectSDK) — use your Cursor plan's models (Claude, GPT, Gemini, Grok, Composer, Auto) as a Hermes provider through Cursor's official SDK, with Hermes tools as native Cursor custom tools; Hermes owns tools, approvals and compaction
 author: Arnav Prabhu

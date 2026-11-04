@@ -71,8 +71,24 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(params["fast"], "true")
 
     def test_alias_resolution(self):
-        self.assertEqual(catalog.resolve_params("auto")[0], "default")
         self.assertEqual(catalog.split_model("sonnet@context=300k"), ("claude-sonnet-5-5", {"context": "300k"}))
+
+    def test_auto_is_cursor_auto_to_hermes_and_default_on_the_wire(self):
+        # Every spelling a user or an older config might hold reaches Cursor as `default`.
+        for spelling in ("cursor-auto", "auto", "default"):
+            self.assertEqual(catalog.resolve_params(spelling), ("default", []), spelling)
+        # Auto has no parameters, so Hermes' reasoning setting adds nothing to it.
+        self.assertEqual(catalog.resolve_params("cursor-auto", {"effort": "high"}), ("default", []))
+        self.assertEqual(catalog.context_length("cursor-auto"), catalog.DEFAULT_CONTEXT)
+
+    def test_picker_lists_auto_first_as_cursor_auto(self):
+        ids = catalog.model_ids()
+        self.assertEqual(ids[0], "cursor-auto")
+        self.assertNotIn("default", ids)
+        self.assertEqual(sorted(ids[1:]), sorted(r["id"] for r in ROWS if r["id"] != "default"))
+        self.assertEqual(catalog.FALLBACK_MODELS[0], "cursor-auto")
+        # Never the bare sentinel Hermes' auxiliary client treats as "inherit / auto-detect".
+        self.assertNotIn("auto", ids + list(catalog.FALLBACK_MODELS))
 
 
 def call(cid, name, args):
@@ -180,6 +196,16 @@ class CredentialTests(unittest.TestCase):
         client = transport.Client(api_key="")
         with self.assertRaises(transport.CursorLoggedOut):
             client.chat.completions.create(model="composer-2.5", messages=[{"role": "user", "content": "hi"}])
+
+    def test_rejected_key_is_401_with_reauth_advice(self):
+        rejected = transport._error_from({"type": "error", "status": 401,
+                                          "message": "AuthenticationError: unauthenticated: Invalid User API Key"})
+        self.assertIsInstance(rejected, transport.CursorLoggedOut)
+        self.assertEqual(rejected.status_code, 401)  # Hermes rotates to the next pooled key on 401
+        self.assertIn("rejected the API key", str(rejected))
+        missing = transport._error_from({"type": "error", "status": 401,
+                                         "message": "AuthenticationError: Not signed in to Cursor: no credential"})
+        self.assertIn("Not signed in", str(missing).split("(")[0])
 
     def test_no_plugin_code_reads_vendor_credential_files(self):
         for path in ROOT.rglob("*"):

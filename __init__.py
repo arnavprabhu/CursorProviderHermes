@@ -104,19 +104,20 @@ def _model_setup_flow(config, current_model, args):
             note_setup_failure("auth")
             return
         key = _current_key()
-    rows = _rows(key) or [{"id": m, "display_name": m} for m in catalog.FALLBACK_MODELS]
-    print(f"\n  Models on your Cursor plan ({len(rows)}):")
-    for i, row in enumerate(rows, 1):
-        mark = "  (current)" if row["id"] == current_model else ""
-        print(f"  {i:>3}. {row['id']:<28} {_note(row['id'])}{mark}")
-    default = current_model if any(r["id"] == current_model for r in rows) else "composer-2.5"
+    ids = catalog.model_ids(_rows(key)) or list(catalog.FALLBACK_MODELS)
+    current = catalog.hermes_id(catalog.ALIASES.get(current_model, current_model))
+    print(f"\n  Models on your Cursor plan ({len(ids)}):")
+    for i, model_id in enumerate(ids, 1):
+        mark = "  (current)" if model_id == current else ""
+        print(f"  {i:>3}. {model_id:<28} {_note(model_id)}{mark}")
+    default = current if current in ids else "composer-2.5"
     choice = input(f"\n  Model number or id [{default}]: ").strip() if interactive else ""
     if not choice:
         selected = default
-    elif choice.isdigit() and 1 <= int(choice) <= len(rows):
-        selected = rows[int(choice) - 1]["id"]
+    elif choice.isdigit() and 1 <= int(choice) <= len(ids):
+        selected = ids[int(choice) - 1]
     else:
-        selected = choice
+        selected = catalog.hermes_id(catalog.ALIASES.get(choice, choice))
     persist_model_selection(selected, rt.PROVIDER, base_url=rt.BASE_URL)
     print(f"  Default model set to: {selected} (via {rt.DISPLAY_NAME})")
 
@@ -135,6 +136,8 @@ def _rows(api_key=None):
 
 
 def _note(model_id):
+    if catalog.cursor_id(model_id) == catalog.CURSOR_AUTO_ID:
+        return catalog.AUTO_NOTE
     window = catalog.context_length(model_id)
     if not window:
         return ""
@@ -160,8 +163,7 @@ class CursorSubscriptionProfile(ProviderProfile):
         return Client(**client_kwargs)
 
     def fetch_models(self, *, api_key=None, base_url=None, timeout=8.0):
-        rows = _rows(api_key)
-        return [row["id"] for row in rows] if rows else None
+        return catalog.model_ids(_rows(api_key)) or None
 
     def missing_credentials_hint(self):
         return f"Run `hermes auth add {rt.PROVIDER}` to sign in to Cursor in your browser, or set CURSOR_API_KEY."

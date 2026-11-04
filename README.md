@@ -80,6 +80,11 @@ To use a key you created yourself instead, run `hermes auth add cursor-subscript
 --type api-key`, or set `CURSOR_API_KEY` in your profile's `.env`. `hermes auth status`, `hermes auth
 list` and `hermes auth remove` work as for any provider.
 
+If Cursor rejects a key (revoked in the dashboard, or past its 90 days), the request fails with
+"Cursor rejected the API key" as a 401, so Hermes moves on to the next key in the pool. Sign in again
+with `hermes auth add cursor-subscription-directsdk`, then drop the dead row with `hermes auth
+remove cursor-subscription-directsdk <id>`.
+
 At request time the plugin uses only the key Hermes resolves for the active profile. It passes the
 key to the sidecar inside each request and strips any ambient `CURSOR_API_KEY` from the sidecar's
 environment. The plugin reads no vendor credential files.
@@ -87,10 +92,29 @@ environment. The plugin reads no vendor credential files.
 ## Models
 
 The picker shows your account's live Cursor catalog, cached for 6 h in
-`$HERMES_HOME/cache/cursor-subscription-directsdk/models.json`. It includes `default` (Auto),
-`composer-2.5`, `claude-opus-5-5`, `claude-sonnet-5-5`, `gpt-5.5`, `gpt-5.6-sol`, `gemini-3.1-pro`,
-`grok-4.7`, and the rest. Aliases: `auto`, `composer`, `opus`, `sonnet`, `haiku`, `gpt`, `gemini`,
-`grok`.
+`$HERMES_HOME/cache/cursor-subscription-directsdk/models.json`, with **Cursor Auto** first as
+`cursor-auto`, then `composer-2.5`, `claude-opus-5-5`, `claude-sonnet-5-5`, `gpt-5.5`, `gpt-5.6-sol`,
+`gemini-3.1-pro`, `grok-4.7`, and the rest. Aliases: `auto`, `composer`, `opus`, `sonnet`, `haiku`,
+`gpt`, `gemini`, `grok`.
+
+### Cursor Auto
+
+`cursor-auto` lets Cursor pick the model for each request, the same as Auto in the Cursor app
+(Cursor's own id for it is `default`, which is what goes on the wire).
+
+```sh
+hermes chat --provider cursor-subscription-directsdk -m cursor-auto -q 'Reply with exactly: OK'
+/model auto            # in a session; `auto` is an alias for cursor-auto
+```
+
+* It is listed as `cursor-auto` rather than `auto` because Hermes treats a bare `auto` model as
+  "inherit / auto-detect" in its auxiliary settings. `/model auto`, `-m auto` and an older config
+  holding `default` all still resolve to Cursor Auto.
+* Cursor does not report which model Auto chose, so Hermes shows `cursor-auto` throughout.
+* Auto has no Cursor parameters, so `/reasoning` and `@param` pins do not apply to it, and Hermes
+  budgets against a 200K context window.
+* Tool calling works the same way as on a fixed model (verified live: parallel and chained tool
+  calls, follow-ups and replay).
 
 * **Context window** is the model's default Cursor variant (for example 1M for Opus 5.5 and GPT-5.5,
   200K when Cursor publishes no context parameter). Hermes compresses against that number.
@@ -157,11 +181,17 @@ The picker shows your account's live Cursor catalog, cached for 6 h in
 ## Tests
 
 ```sh
+HPY=~/.hermes/hermes-agent/venv/bin/python                    # Hermes' own python
 python3 -m unittest discover -s tests -p 'test_*.py'          # offline: planner, catalog, prompts, credentials
-CURSOR_API_KEY=... python3 tests/live_loop.py composer-2.5    # live: tool loop, follow-up, replay (uses your plan)
-CURSOR_API_KEY=... python3 tests/worker_probe.py              # live: raw sidecar protocol
+$HPY tests/live_loop.py composer-2.5                          # live: tool loop, follow-up, replay (uses your plan)
+$HPY tests/live_loop.py cursor-auto                           # the same on Cursor Auto
+$HPY tests/worker_probe.py                                    # live: raw sidecar protocol
 .venv/bin/python -I tests/list_agents.py                      # list local Cursor agents the sidecar created
 ```
+
+The live scripts take the key from Hermes' credential pool inside the process (`tests/_hermes_key.py`)
+and never print it. `CURSOR_API_KEY` set for that one command also works. Don't `export` a key in a
+shell an AI agent drives, because agent terminals can snapshot their environment to disk.
 
 ## Files
 

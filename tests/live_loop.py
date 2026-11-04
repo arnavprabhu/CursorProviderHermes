@@ -3,17 +3,19 @@
 Simulates Hermes' loop: create() -> run requested tools locally -> create() with results -> ...
 then a follow-up user turn on the same conversation, then a replayed (rewritten) history.
 
-    CURSOR_API_KEY=... python3 -I tests/live_loop.py [model]     (a Cursor user API key)
+    ~/.hermes/hermes-agent/venv/bin/python tests/live_loop.py [model]   (key from Hermes' pool)
+    CURSOR_API_KEY=... python3 -I tests/live_loop.py [model]             (or an explicit key)
 """
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import transport  # noqa: E402
+from _hermes_key import cursor_key  # noqa: E402
 
 MODEL = sys.argv[1] if len(sys.argv) > 1 else "composer-2.5"
 TOOLS = [
@@ -70,7 +72,7 @@ def loop(client, messages, stream=True, limit=8):
 
 
 def main():
-    client = transport.Client(api_key=os.environ["CURSOR_API_KEY"])
+    client = transport.Client(api_key=cursor_key())
     system = "You are a terse assistant. Always use tools for weather and arithmetic; never guess."
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": "Weather in Dallas and Austin? Then add the two temperatures with the add tool."}]

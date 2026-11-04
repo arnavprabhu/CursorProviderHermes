@@ -37,6 +37,8 @@ INSTALL_HINT = (f"The Cursor SDK runtime is not installed. Run `hermes auth add 
                 f"`python3 {PLUGIN_DIR / 'cursor_setup.py'} install`).")
 LOGGED_OUT_HINT = (f"Not signed in to Cursor. Run `hermes auth add {PROVIDER}` to sign in with your browser, "
                    "or set CURSOR_API_KEY to a Cursor user API key.")
+REJECTED_HINT = (f"Cursor rejected the API key (revoked or expired). Run `hermes auth add {PROVIDER}` to sign "
+                 f"in again, and `hermes auth remove {PROVIDER} <id>` to drop the dead key.")
 
 
 def state_dir() -> Path:

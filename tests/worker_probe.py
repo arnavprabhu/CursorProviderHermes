@@ -1,4 +1,7 @@
-"""Drive sidecar/worker.py directly over JSON lines (debug aid)."""
+"""Drive sidecar/worker.py directly over JSON lines (debug aid).
+
+    ~/.hermes/hermes-agent/venv/bin/python tests/worker_probe.py   (key from Hermes' pool, or CURSOR_API_KEY)
+"""
 import json
 import os
 import subprocess
@@ -8,6 +11,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _hermes_key import cursor_key  # noqa: E402
+
+KEY = cursor_key()
 env = dict({k: v for k, v in os.environ.items() if k != "CURSOR_API_KEY"}, CURSOR_SDK_LOG=os.environ.get("CURSOR_SDK_LOG", "info"))
 proc = subprocess.Popen([str(ROOT / "bin" / "cursor-sidecar")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=sys.stderr, text=True, env=env)
@@ -25,7 +32,8 @@ threading.Thread(target=reader, daemon=True).start()
 
 
 def send(obj):
-    print(time.strftime("%X"), "->", json.dumps(obj)[:300], flush=True)
+    shown = json.dumps(obj).replace(KEY, "<key>")  # never echo the credential
+    print(time.strftime("%X"), "->", shown[:300], flush=True)
     proc.stdin.write(json.dumps(obj) + "\n")
     proc.stdin.flush()
 
@@ -42,7 +50,7 @@ def wait_for(req, kinds=("tool_calls", "done", "error"), timeout=120):
 
 tools = [{"name": "get_weather", "description": "Weather for a city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}]
 send({"op": "turn", "id": 1, "session": "s1", "create": {"model": "composer-2.5", "params": [], "tools": tools,
-                                                   "api_key": os.environ["CURSOR_API_KEY"]},
+                                                   "api_key": KEY},
       "send": {"text": "Weather in Dallas? use the tool, then answer in one sentence."}, "results": None})
 ev = wait_for(1)
 calls = ev.get("calls") or []

@@ -2,7 +2,8 @@
 
 The live list comes from the SDK (`Cursor.models.list`, account-specific) and is cached on disk so
 hot paths (context length, effort mapping) never spawn anything. Model ids are Cursor's own
-(``claude-opus-5-5``, ``gpt-5.5``, ``composer-2.5``, ``default`` = Auto). A Cursor model parameter
+(``claude-opus-5-5``, ``gpt-5.5``, ``composer-2.5``), except Auto: Cursor's ``default`` is shown to
+Hermes as ``cursor-auto`` (see ``AUTO_ID``). A Cursor model parameter
 can be pinned in the id after ``@``: ``claude-opus-5-5@context=1m,fast=true``.
 """
 from __future__ import annotations
@@ -18,10 +19,18 @@ except ImportError:  # flat import (tests, setup CLI)
 
 CACHE_TTL_S = 6 * 3600
 DEFAULT_CONTEXT = 200_000
+
+# Cursor Auto: Cursor picks the model per request (its catalog id is ``default``). Hermes sees it as
+# ``cursor-auto``: a bare ``auto`` is Hermes' own "inherit / auto-detect" sentinel for auxiliary
+# models, and ``default`` reads like a config placeholder. ``auto`` and ``default`` still resolve.
+AUTO_ID = "cursor-auto"
+CURSOR_AUTO_ID = "default"
+AUTO_NOTE = "Auto: Cursor picks the model for each request"
+
 # Shown when the live list is unavailable (logged out, runtime missing). Ids verified against the
 # live catalog when this plugin was written; the live list always wins when it loads.
 FALLBACK_MODELS = (
-    "default", "composer-2.5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "gpt-5.5",
+    AUTO_ID, "composer-2.5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "gpt-5.5",
     "gpt-5.6-sol", "gemini-3.1-pro", "grok-4.7",
 )
 EFFORT_PARAMS = ("effort", "reasoning_effort", "reasoning")
@@ -32,7 +41,7 @@ _memo = {"mtime": None, "rows": None}
 
 # Short names; Hermes resolves them via the profile's model_aliases, the client resolves them too.
 ALIASES = {
-    "auto": "default",
+    "auto": AUTO_ID,
     "composer": "composer-2.5",
     "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-5-5",
@@ -75,16 +84,27 @@ def store(rows):
     tmp.replace(path)
 
 
+def cursor_id(model_id):
+    """Hermes-facing id -> the id Cursor's API expects (``cursor-auto`` -> ``default``)."""
+    model_id = ALIASES.get(model_id, model_id)
+    return CURSOR_AUTO_ID if model_id == AUTO_ID else model_id
+
+
+def hermes_id(model_id):
+    """Cursor catalog id -> the id Hermes shows and stores (``default`` -> ``cursor-auto``)."""
+    return AUTO_ID if model_id == CURSOR_AUTO_ID else model_id
+
+
 def split_model(model):
-    """``id@k=v,k2=v2`` -> (id, {k: v})."""
+    """``id@k=v,k2=v2`` -> (Cursor id, {k: v})."""
     base, _, tail = (model or "").partition("@")
-    base = ALIASES.get(base.strip(), base.strip())
+    base = cursor_id(base.strip())
     pins = {}
     for part in filter(None, (p.strip() for p in tail.split(","))):
         key, _, value = part.partition("=")
         if key.strip() and value.strip():
             pins[key.strip()] = value.strip()
-    return base.strip(), pins
+    return base, pins
 
 
 def find(model_id):
@@ -155,5 +175,7 @@ def resolve_params(model, reasoning=None):
 
 
 def model_ids(rows=None):
+    """Hermes-facing ids for the picker, Auto first (Cursor lists it wherever it likes)."""
     rows = rows if rows is not None else load_cached()
-    return [row["id"] for row in rows or () if isinstance(row, dict) and row.get("id")]
+    ids = [hermes_id(row["id"]) for row in rows or () if isinstance(row, dict) and row.get("id")]
+    return sorted(ids, key=lambda i: i != AUTO_ID)

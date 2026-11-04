@@ -222,7 +222,9 @@ atexit.register(lambda: _sidecar.stop() if _sidecar is not None else None)
 def _error_from(msg):
     status, text = msg.get("status"), msg.get("message") or "Cursor request failed"
     if status == 401 or msg.get("code") == "unauthenticated" or "Not signed in" in text:
-        return CursorLoggedOut(f"{rt.LOGGED_OUT_HINT} ({text})")
+        # 401 either way, so Hermes rotates to the next pooled key; only the advice differs.
+        hint = rt.LOGGED_OUT_HINT if "Not signed in" in text else rt.REJECTED_HINT
+        return CursorLoggedOut(f"{hint} ({text})")
     return CursorError(text, status, bool(msg.get("retryable")), msg.get("code"))
 
 
