@@ -86,8 +86,12 @@ with `hermes auth add cursor-subscription-directsdk`, then drop the dead row wit
 remove cursor-subscription-directsdk <id>`.
 
 At request time the plugin uses only the key Hermes resolves for the active profile. It passes the
-key to the sidecar inside each request and strips any ambient `CURSOR_API_KEY` from the sidecar's
-environment. The plugin reads no vendor credential files.
+key to the sidecar inside each request (over stdin, never the environment). The sidecar, Cursor's
+node bridge and the sign-in helper get an environment rebuilt from an allowlist
+(`CHILD_ENV_ALLOWLIST` in `cursor_runtime.py`: `PATH`, `HOME`, user and locale, `TMPDIR`, TLS and
+proxy settings, the display variables the sign-in browser needs, and this plugin's own
+`CURSOR_SUBSCRIPTION_*` / `CURSOR_SDK_LOG`), so other providers' keys, bot tokens and an ambient
+`CURSOR_API_KEY` never reach Cursor's code. The plugin reads no vendor credential files.
 
 ## Models
 
@@ -141,16 +145,19 @@ hermes chat --provider cursor-subscription-directsdk -m cursor-auto -q 'Reply wi
   are sent to Cursor (`api.cursor.com`) through Cursor's SDK, using your Cursor key and plan. Setup
   downloads `cursor-sdk` and its dependencies from PyPI (hash-pinned). Sign-in talks to
   `cursor.com`. Nothing else is contacted, and there is no telemetry.
-* **Processes:** one long-lived sidecar per Hermes process (`.venv` python running
-  `sidecar/worker.py`), which starts Cursor's bundled node bridge listening on loopback. Both exit
-  with Hermes. The sign-in runs the same bundled node once.
+* **Processes:** one long-lived sidecar per Hermes profile in use by a Hermes process (`.venv`
+  python running `sidecar/worker.py`), which starts Cursor's bundled node bridge listening on
+  loopback. Both exit with Hermes. The sign-in runs the same bundled node once.
 * **Files:** the venv at `<plugin>/.venv`; a model cache and an empty Cursor agent workspace under
-  `$HERMES_HOME/cache/cursor-subscription-directsdk/`. Cursor's SDK keeps local agent transcripts
+  `$HERMES_HOME/cache/cursor-subscription-directsdk/` of the active profile (a multi-profile gateway
+  keeps each profile's agent state apart). Cursor's SDK keeps local agent transcripts
   for live conversations; the plugin deletes each agent when its conversation closes (set
   `CURSOR_SUBSCRIPTION_KEEP_AGENTS=1` to keep them).
 * **Credentials:** stored only by Hermes (credential pool / `.env`), as described above.
-* **Tools and approvals:** Cursor's built-in tools are disabled. Every tool call is executed by
-  Hermes under its normal approval rules; the plugin never auto-approves anything.
+* **Tools and approvals:** Cursor's built-in tools are disabled, and agents are created with no MCP
+  servers and no Cursor settings sources (no project/user `.cursor` config), so Hermes' tools are
+  the only tools. Every tool call is executed by Hermes under its normal approval rules; the plugin
+  never auto-approves anything.
 * **Unattended runs:** the browser sign-in only runs from `hermes auth add` or an interactive
   `hermes model`, and it times out after 10 minutes. Without a credential, requests fail fast with
   the sign-in hint instead of waiting.
@@ -182,7 +189,8 @@ hermes chat --provider cursor-subscription-directsdk -m cursor-auto -q 'Reply wi
 
 ```sh
 HPY=~/.hermes/hermes-agent/venv/bin/python                    # Hermes' own python
-python3 -m unittest discover -s tests -p 'test_*.py'          # offline: planner, catalog, prompts, credentials
+python3 -m unittest discover -s tests -p 'test_*.py'          # offline: planner, catalog, prompts, credentials, env
+.venv/bin/python -I -m unittest discover -s tests -p 'test_*.py'  # the same, plus the agent-options check
 $HPY tests/live_loop.py composer-2.5                          # live: tool loop, follow-up, replay (uses your plan)
 $HPY tests/live_loop.py cursor-auto                           # the same on Cursor Auto
 $HPY tests/worker_probe.py                                    # live: raw sidecar protocol
@@ -204,7 +212,7 @@ shell an AI agent drives, because agent terminals can snapshot their environment
 | `sidecar/requirements.lock` | Hash-pinned runtime requirements. |
 | `cursor_runtime.py`, `cursor_setup.py` | Runtime install, sign-in helper, setup CLI. |
 | `cursor_catalog.py` | Cached live catalog, context windows, effort mapping, `@param` pins. |
-| `bin/cursor-sidecar` | Launches the sidecar with the private venv. |
+| `bin/cursor-sidecar` | Launches the sidecar with the private venv in an allowlisted environment. |
 
 License: MIT. `cursor-sdk` is Cursor's separately distributed package, governed by Cursor's own
 license and terms.

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -192,6 +193,58 @@ class CredentialTests(unittest.TestCase):
         finally:
             os.environ.pop("CURSOR_API_KEY")
 
+    def test_child_env_is_an_allowlist(self):
+        planted = {"CURSOR_API_KEY": "crsr_ambient", "OPENAI_API_KEY": "sk-x", "TELEGRAM_BOT_TOKEN": "1:x",
+                   "PYTHONPATH": "/hermes/venv", "UV_INDEX_URL": "https://mirror.invalid/simple",
+                   "LANG": "C.UTF-8", "CURSOR_SDK_LOG": "debug"}
+        saved = {k: os.environ.get(k) for k in planted}
+        os.environ.update(planted)
+        try:
+            env = rt.clean_env({"CURSOR_LOGIN_KEY_NAME": "Hermes"})
+            self.assertLessEqual(set(env) - {"CURSOR_LOGIN_KEY_NAME"}, set(rt.CHILD_ENV_ALLOWLIST))
+            for name in ("CURSOR_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "PYTHONPATH", "UV_INDEX_URL"):
+                self.assertNotIn(name, env)
+            self.assertEqual((env["LANG"], env["CURSOR_SDK_LOG"]), ("C.UTF-8", "debug"))
+            installer = rt.clean_env(installer=True)
+            self.assertEqual(installer["UV_INDEX_URL"], "https://mirror.invalid/simple")
+            self.assertNotIn("OPENAI_API_KEY", installer)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_launcher_allowlist_matches_runtime(self):
+        text = (ROOT / "bin" / "cursor-sidecar").read_text(encoding="utf-8")
+        names = text.split('ALLOW="', 1)[1].split('"', 1)[0].split()
+        self.assertEqual(sorted(names), sorted(rt.CHILD_ENV_ALLOWLIST))
+
+    def test_launcher_rebuilds_the_environment(self):
+        import shutil
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "bin").mkdir()
+            launcher = Path(tmp) / "bin" / "cursor-sidecar"
+            shutil.copy(ROOT / "bin" / "cursor-sidecar", launcher)
+            fake = Path(tmp) / ".venv" / "bin" / "python"
+            fake.parent.mkdir(parents=True)
+            # A python script itself (no shell in between, which would add PWD/SHLVL).
+            fake.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                            "print(json.dumps([dict(os.environ), sys.argv[1:]]))\n")
+            fake.chmod(0o755)
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/home/u", "LANG": "C.UTF-8",
+                   "CURSOR_SUBSCRIPTION_WORKDIR": "/w/with space\nand newline", "OPENAI_API_KEY": "sk-x",
+                   "CURSOR_API_KEY": "crsr_ambient", "PYTHONPATH": "/hermes/venv", "DISCORD_BOT_TOKEN": "x"}
+            out = subprocess.run(["/bin/sh", str(launcher), "a b", "c"], env=env, capture_output=True,
+                                 text=True, check=True).stdout
+        child, argv = json.loads(out)
+        self.assertEqual(argv, ["-I", str(Path(tmp).resolve() / "sidecar" / "worker.py"), "a b", "c"])
+        # Python may add LC_CTYPE (PEP 538 locale coercion); nothing outside the allowlist.
+        self.assertLessEqual(set(child), set(rt.CHILD_ENV_ALLOWLIST))
+        for name in ("PATH", "HOME", "LANG", "CURSOR_SUBSCRIPTION_WORKDIR"):
+            self.assertEqual(child[name], env[name])
+
     def test_client_without_hermes_credential_refuses(self):
         client = transport.Client(api_key="")
         with self.assertRaises(transport.CursorLoggedOut):
@@ -216,6 +269,48 @@ class CredentialTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("auth.json", text, path)
             self.assertNotIn(".cursor/sdk", text, path)
+
+
+class ProfileTests(unittest.TestCase):
+    def test_each_hermes_home_gets_its_own_sidecar_and_workspace(self):
+        saved = os.environ["HERMES_HOME"]
+        try:
+            os.environ["HERMES_HOME"] = "/profiles/a"
+            a = transport.Client(api_key="k")
+            os.environ["HERMES_HOME"] = "/profiles/b"
+            b = transport.Client(api_key="k")
+        finally:
+            os.environ["HERMES_HOME"] = saved
+        self.assertTrue(a.workdir.startswith("/profiles/a/"))
+        self.assertTrue(b.workdir.startswith("/profiles/b/"))
+        sa, sb = transport.get_sidecar(a.command, a.workdir), transport.get_sidecar(b.command, b.workdir)
+        self.assertIsNot(sa, sb)
+        self.assertEqual((sa.workdir, sb.workdir), (a.workdir, b.workdir))
+        self.assertIs(transport.get_sidecar(a.command, a.workdir), sa)
+
+
+try:
+    import cursor_sdk  # noqa: F401  (present in the plugin venv: .venv/bin/python -I -m unittest ...)
+except ImportError:
+    cursor_sdk = None
+
+
+@unittest.skipIf(cursor_sdk is None, "cursor-sdk not installed in this interpreter")
+class WorkerOptionsTests(unittest.TestCase):
+    def test_agent_has_only_hermes_tools(self):
+        sys.path.insert(0, str(ROOT / "sidecar"))
+        import worker
+        captured = []
+        fake = SimpleNamespace(workdir="/tmp/w", client=SimpleNamespace(
+            agents=SimpleNamespace(create=lambda options: captured.append(options) or object())))
+        session = worker.Session(fake, "s1")
+        session.create({"model": "composer-2.5", "api_key": "k",
+                        "tools": [{"name": "terminal", "description": "d", "schema": {"type": "object"}}]})
+        wire = captured[0].to_json()
+        self.assertEqual(wire["tools"], {"names": ["mcp"]})
+        self.assertNotIn("mcpServers", wire)
+        self.assertNotIn("settingSources", wire["local"])
+        self.assertEqual(list(wire["local"]["customTools"]), ["terminal"])
 
 
 if __name__ == "__main__":

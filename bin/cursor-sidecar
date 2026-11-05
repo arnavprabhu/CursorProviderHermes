@@ -1,10 +1,36 @@
 #!/bin/sh
-# Launches the Cursor SDK sidecar (sidecar/worker.py) with the plugin's private venv python.
+# Launches the Cursor SDK sidecar (sidecar/worker.py) with the plugin's private venv python, in an
+# environment rebuilt from an allowlist: nothing else from the caller's environment reaches the
+# sidecar or Cursor's node bridge. ALLOW mirrors CHILD_ENV_ALLOWLIST in cursor_runtime.py (checked
+# by tests/test_offline.py).
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 PY="$DIR/.venv/bin/python"
 if [ ! -x "$PY" ]; then
   echo "cursor-subscription-directsdk: Cursor SDK runtime not installed. Run: hermes auth add cursor-subscription-directsdk" >&2
   exit 3
 fi
-unset PYTHONPATH PYTHONHOME VIRTUAL_ENV CURSOR_API_KEY
-exec "$PY" -I "$DIR/sidecar/worker.py" "$@"
+case "$PY" in
+  *=*) echo "cursor-subscription-directsdk: the plugin path must not contain '='" >&2; exit 3 ;;
+esac
+ALLOW="PATH HOME USER LOGNAME TMPDIR
+LANG LANGUAGE LC_ALL LC_ADDRESS LC_COLLATE LC_CTYPE LC_IDENTIFICATION
+LC_MEASUREMENT LC_MESSAGES LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER
+LC_TELEPHONE LC_TIME
+SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS
+HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+XDG_CURRENT_DESKTOP BROWSER
+CURSOR_SUBSCRIPTION_WORKDIR CURSOR_SUBSCRIPTION_TOOL_TIMEOUT CURSOR_SUBSCRIPTION_DEBUG
+CURSOR_SUBSCRIPTION_KEEP_AGENTS CURSOR_SDK_LOG"
+# Build: NAME=value ... "$PY" -I worker.py <original args>, then hand it to `env -i`.
+argc=$#
+for name in $ALLOW; do
+  eval "isset=\${$name+x}"
+  [ -n "$isset" ] && eval "set -- \"\$@\" \"$name=\${$name}\""
+done
+set -- "$@" "$PY" -I "$DIR/sidecar/worker.py"
+i=0
+while [ "$i" -lt "$argc" ]; do
+  arg=$1; shift; set -- "$@" "$arg"; i=$((i + 1))
+done
+exec env -i "$@"

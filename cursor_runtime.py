@@ -55,11 +55,36 @@ def venv_python() -> Path:
     return VENV_DIR / "bin" / "python"
 
 
-def clean_env(extra=None):
-    """Child environment: no Hermes venv leakage, and no ambient Cursor key (the key Hermes resolved
-    for this request is the only one the sidecar may use)."""
-    drop = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CURSOR_API_KEY")
-    env = {k: v for k, v in os.environ.items() if k not in drop}
+# The only variables any child process (venv python, the SDK's node bridge, the login helper and the
+# browser it opens) inherits from Hermes. Everything else, including every other provider's key, bot
+# tokens and an ambient CURSOR_API_KEY, stays in Hermes. bin/cursor-sidecar applies the same list
+# (tests/test_offline.py keeps the two in sync).
+CHILD_ENV_ALLOWLIST = (
+    # process basics
+    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR",
+    # locale
+    "LANG", "LANGUAGE", "LC_ALL", "LC_ADDRESS", "LC_COLLATE", "LC_CTYPE", "LC_IDENTIFICATION",
+    "LC_MEASUREMENT", "LC_MESSAGES", "LC_MONETARY", "LC_NAME", "LC_NUMERIC", "LC_PAPER",
+    "LC_TELEPHONE", "LC_TIME",
+    # TLS trust and proxies (python and the node bridge)
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    # opening the sign-in page in the user's browser
+    "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_CURRENT_DESKTOP", "BROWSER",
+    # this plugin's own knobs
+    "CURSOR_SUBSCRIPTION_WORKDIR", "CURSOR_SUBSCRIPTION_TOOL_TIMEOUT", "CURSOR_SUBSCRIPTION_DEBUG",
+    "CURSOR_SUBSCRIPTION_KEEP_AGENTS", "CURSOR_SDK_LOG",
+)
+# Installer configuration (index mirrors, cache dirs), passed to uv/pip during install only.
+INSTALLER_ENV_PREFIXES = ("UV_", "PIP_")
+
+
+def clean_env(extra=None, *, installer=False):
+    """Child environment built from CHILD_ENV_ALLOWLIST, plus *extra*. The key Hermes resolved for a
+    request reaches the sidecar over stdin, never through the environment."""
+    env = {k: v for k, v in os.environ.items()
+           if k in CHILD_ENV_ALLOWLIST or (installer and k.startswith(INSTALLER_ENV_PREFIXES))}
     env.update(extra or {})
     return env
 
@@ -99,9 +124,10 @@ def install(*, quiet: bool = False) -> None:
         say(f"Creating the Cursor SDK venv in {VENV_DIR} ...")
         if uv:
             subprocess.run([uv, "venv", "--quiet", "--python", sys.executable, str(VENV_DIR)],
-                           check=True, env=clean_env())
+                           check=True, env=clean_env(installer=True))
         else:
-            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True, env=clean_env())
+            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True,
+                           env=clean_env(installer=True))
     say(f"Installing {SDK_REQUIREMENT} from PyPI (hash-pinned, about 200 MB) ...")
     if uv:
         cmd = [uv, "pip", "install", "--quiet", "--python", str(venv_python()), "--require-hashes",
@@ -109,7 +135,7 @@ def install(*, quiet: bool = False) -> None:
     else:
         cmd = [str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
                "--require-hashes", "-r", str(LOCKFILE)]
-    subprocess.run(cmd, check=True, env=clean_env())
+    subprocess.run(cmd, check=True, env=clean_env(installer=True))
     if not runtime_installed():
         raise RuntimeError("cursor-sdk did not import after install")
     say("Cursor SDK runtime ready.")

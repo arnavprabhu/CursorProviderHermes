@@ -249,8 +249,14 @@ class Session:
             name=spec.get("name") or "Hermes",
             # Only the MCP group: no shell/edit/read built-ins, but custom tools stay offered.
             tools=["mcp"] if tools else [],
-            local=LocalAgentOptions(cwd=self.worker.workdir, custom_tools=tools or None),
+            # No MCP servers and no settings sources (project/user/team .cursor config), so nothing
+            # can add a tool that bypasses Hermes' approvals. The only tools are Hermes' own.
+            mcp_servers={},
+            local=LocalAgentOptions(cwd=self.worker.workdir, custom_tools=tools or None, setting_sources=[]),
         )
+        wire = options.to_json()
+        if wire.get("mcpServers") or (wire.get("local") or {}).get("settingSources"):
+            raise RuntimeError("refusing to create a Cursor agent with MCP servers or settings sources")
         self.agent = self.worker.client.agents.create(options)
 
     def start_run(self, send):

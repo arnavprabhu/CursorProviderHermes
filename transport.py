@@ -97,8 +97,9 @@ def _chunk(model, delta, finish=None, usage=None):
 # ── sidecar process (one per Hermes process) ───────────────────────────────────────────────────
 
 class Sidecar:
-    def __init__(self, command):
+    def __init__(self, command, workdir):
         self.command = list(command)
+        self.workdir = workdir
         self.proc = None
         self.lock = threading.Lock()
         self.write_lock = threading.Lock()
@@ -115,7 +116,7 @@ class Sidecar:
                 return
             if not rt.runtime_present():
                 raise CursorRuntimeMissing()
-            env = rt.clean_env({"CURSOR_SUBSCRIPTION_WORKDIR": str(rt.state_dir() / "workspace")})
+            env = rt.clean_env({"CURSOR_SUBSCRIPTION_WORKDIR": self.workdir})
             self.proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
                                          env=env, start_new_session=True)
@@ -203,20 +204,34 @@ class Sidecar:
                 self.proc.kill()
 
 
-_sidecar = None
+# One sidecar per (launcher, Hermes home): in a multi-profile gateway each profile gets its own
+# sidecar and Cursor agent workspace under its own $HERMES_HOME.
+_sidecars = {}
 _sidecar_lock = threading.Lock()
 
 
-def get_sidecar(command=None):
-    global _sidecar
+def profile_workdir():
+    """The Cursor agent workspace of the Hermes profile active in this context."""
+    return str(rt.state_dir() / "workspace")
+
+
+def get_sidecar(command=None, workdir=None):
+    key = (tuple(command) if command else (str(rt.LAUNCHER),), workdir or profile_workdir())
     with _sidecar_lock:
-        wanted = list(command) if command else [str(rt.LAUNCHER)]
-        if _sidecar is None or (_sidecar.command != wanted and not _sidecar.alive()):
-            _sidecar = Sidecar(wanted)
-        return _sidecar
+        sidecar = _sidecars.get(key)
+        if sidecar is None:
+            sidecar = _sidecars[key] = Sidecar(*key)
+        return sidecar
 
 
-atexit.register(lambda: _sidecar.stop() if _sidecar is not None else None)
+def _stop_all():
+    with _sidecar_lock:
+        sidecars = list(_sidecars.values())
+    for sidecar in sidecars:
+        sidecar.stop()
+
+
+atexit.register(_stop_all)
 
 
 def _error_from(msg):
@@ -377,8 +392,9 @@ def normalize_tools(tools):
 # ── conversation registry ──────────────────────────────────────────────────────────────────────
 
 class Conversation:
-    def __init__(self, sid, model_key, tools_sig):
+    def __init__(self, sid, model_key, tools_sig, sidecar=None):
         self.sid, self.model_key, self.tools_sig = sid, model_key, tools_sig
+        self.sidecar = sidecar  # the profile sidecar that owns this Cursor agent
         self.consumed = []   # digests of the non-system messages the Cursor agent has seen
         self.pending = []    # tool calls published to Hermes, awaiting results
         self.busy = False
@@ -389,7 +405,7 @@ _conversations = OrderedDict()
 _conv_lock = threading.Lock()
 
 
-def _sweep(sidecar):
+def _sweep():
     now = time.monotonic()
     stale = []
     with _conv_lock:
@@ -403,7 +419,8 @@ def _sweep(sidecar):
                 break
             stale.append(_conversations.pop(fp))
     for conv in stale:
-        sidecar.notify("close", session=conv.sid)
+        if conv.sidecar is not None:
+            conv.sidecar.notify("close", session=conv.sid)
 
 
 def _plan(conv, digests, rest, model_key, tools_sig):
@@ -449,6 +466,9 @@ class Client:
         self.api_key = api_key if isinstance(api_key, str) else ""
         self.base_url = BASE_URL
         self.command = [str(rt.LAUNCHER)]
+        # Resolved once, in the profile context that built this client (cancel() can arrive on
+        # another thread without that context).
+        self.workdir = profile_workdir()
         self._key_id = hashlib.sha256(self.api_key.encode()).hexdigest()[:16]
         self.timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else DEFAULT_EVENT_TIMEOUT_S
         self._lock = threading.Lock()
@@ -460,7 +480,7 @@ class Client:
     def cancel(self):
         with self._lock:
             sids = tuple(self._active)
-        sidecar = get_sidecar(self.command)
+        sidecar = get_sidecar(self.command, self.workdir)
         for sid in sids:
             sidecar.notify("cancel", session=sid)
 
@@ -504,17 +524,18 @@ class Client:
         model_key = (model_id, tuple(params))
         tools_sig = hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()
         digests = [digest(m) for m in rest]
-        fingerprint = hashlib.sha256(json.dumps([self._key_id, system, digests[0], auxiliary]).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([self.workdir, self._key_id, system, digests[0],
+                                                 auxiliary]).encode()).hexdigest()
 
-        sidecar = get_sidecar(self.command)
-        _sweep(sidecar)
+        sidecar = get_sidecar(self.command, self.workdir)
+        _sweep()
         with _conv_lock:
             conv = _conversations.get(fingerprint)
             plan = None if response_format else _plan(conv, digests, rest, model_key, tools_sig)
             if plan is None:
                 if conv is not None and not conv.busy:
                     sidecar.notify("close", session=conv.sid)
-                conv = Conversation(f"h-{uuid.uuid4().hex[:16]}", model_key, tools_sig)
+                conv = Conversation(f"h-{uuid.uuid4().hex[:16]}", model_key, tools_sig, sidecar)
                 _conversations[fingerprint] = conv
             conv.busy = True
             conv.last_used = time.monotonic()
